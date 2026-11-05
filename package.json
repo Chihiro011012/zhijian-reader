@@ -1,0 +1,15 @@
+{
+  "name": "jian-yue-reader",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "start": "node scripts/serve.mjs",
+    "dev": "vite --host 0.0.0.0",
+    "build": "node scripts/generate-icons.mjs && vite build --base ./ && node scripts/build-sw.js",
+    "preview": "vite preview --host 0.0.0.0",
+    "test": "node --experimental-test-isolation=none --test tests/*.test.js"
+  },
+  "dependencies": { "fflate": "^0.8.2" },
+  "devDependencies": { "vite": "^6.4.1", "@xmldom/xmldom": "^0.8.11" }
+}
