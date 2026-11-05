@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PackedAudioPlayer } from '../src/audio-player.js';
 import { NATURAL_VOICES } from '../src/voices.js';
+import { OnlineTtsProvider } from '../src/online-tts.js';
 
 class FakeAudio extends EventTarget {
   constructor() {
@@ -44,9 +45,7 @@ function deferred() {
 }
 
 async function settle() {
-  await Promise.resolve();
-  await Promise.resolve();
-  await Promise.resolve();
+  await new Promise(resolve => setImmediate(resolve));
 }
 
 function makeBook(id = 'book-1', count = 3) {
@@ -58,18 +57,20 @@ function makeBook(id = 'book-1', count = 3) {
   };
 }
 
-function fixture(getAudio = async () => new Blob(['mp3'])) {
+function fixture(getAudio = async () => new Blob(['mp3']), provider) {
   const requests = [];
+  const saved = [];
   const store = {
     getAudio(bookId, index, voiceId) {
       requests.push({ bookId, index, voiceId });
       return getAudio(bookId, index, voiceId);
     },
+    async putAudioIfBookExists(bookId, index, blob, voiceId) { saved.push({ bookId, index, blob, voiceId }); return true; },
   };
   const audio = new FakeAudio();
   const urls = new FakeUrls();
-  const player = new PackedAudioPlayer({ store, audio, url: urls, mediaSession: null });
-  return { player, audio, urls, requests };
+  const player = new PackedAudioPlayer({ store, provider, audio, url: urls, mediaSession: null });
+  return { player, audio, urls, requests, saved, store };
 }
 
 test('seeking to another paragraph and changing voice load the matching local tracks', async () => {
@@ -227,8 +228,8 @@ test('canonical preferences still play old female and male track keys', async ()
   assert.equal(player.voiceId, 'male');
 });
 
-test('ordinary text remains navigable without probing or playing a system voice', async () => {
-  const { player, audio, requests } = fixture();
+test('ordinary text waits for explicit play and reports an unconfigured online service', async () => {
+  const { player, audio, requests } = fixture(async () => null);
   const book = makeBook();
   delete book.audioPack;
   player.setBook(book);
@@ -239,8 +240,242 @@ test('ordinary text remains navigable without probing or playing a system voice'
   let error;
   player.addEventListener('statechange', event => { error = event.detail.error; });
   player.play();
+  await settle();
   assert.equal(player.status, 'error');
-  assert.match(error, /先生成并导入四音色听书包/);
+  assert.match(error, /在线语音服务尚未配置/);
   assert.equal(audio.playCalls, 0);
+  assert.equal(requests.length, 1);
+});
+
+function ordinaryBook(count = 3) {
+  const book = makeBook('ordinary', count);
+  delete book.audioPack;
+  return book;
+}
+
+test('ordinary document opens and paused navigation never generate or upload text', async () => {
+  const generated = [];
+  const { player, requests } = fixture(async () => null, { generate: async request => { generated.push(request); return new Blob(['audio']); } });
+  player.setBook(ordinaryBook());
+  player.seek(2, { autoplay: false });
+  player.setVoice('yunyang');
+  await settle();
+  assert.equal(generated.length, 0);
   assert.equal(requests.length, 0);
+  assert.equal(player.index, 2);
+  assert.equal(player.voiceId, 'yunyang');
+});
+
+test('ordinary document generates the selected exact voice, caches it, and advances', async () => {
+  const generated = [];
+  const { player, audio, saved } = fixture(async () => null, { generate: async request => { generated.push(request); return new Blob([request.text], { type: 'audio/mpeg' }); } });
+  player.setBook(ordinaryBook(2));
+  player.setVoice('xiaoyi');
+  player.play();
+  assert.equal(player.status, 'loading');
+  await settle();
+  assert.equal(player.status, 'playing');
+  assert.equal(audio.playCalls, 1);
+  assert.equal(generated[0].voiceId, 'xiaoyi');
+  assert.equal(generated[0].text, '第1段');
+  assert.equal(saved[0].voiceId, 'xiaoyi');
+  audio.finish();
+  await settle();
+  assert.equal(generated[1].text, '第2段');
+  assert.equal(player.status, 'playing');
+  assert.equal(saved.length, 2);
+});
+
+test('cached online audio plays offline without consulting the provider', async () => {
+  let generated = 0;
+  const { player, audio } = fixture(async () => new Blob(['cached']), { generate() { generated++; throw new Error('offline'); } });
+  player.setBook(ordinaryBook());
+  player.setVoice('yunxi');
+  player.play();
+  await settle();
+  assert.equal(player.status, 'playing');
+  assert.equal(audio.playCalls, 1);
+  assert.equal(generated, 0);
+});
+
+test('ordinary document permits only the four canonical voices', async () => {
+  const generated = [];
+  const { player } = fixture(async () => null, { generate: async request => { generated.push(request.voiceId); return new Blob(['audio']); } });
+  player.setBook(ordinaryBook());
+  for (const voice of NATURAL_VOICES) {
+    player.setVoice(voice.id);
+    player.play();
+    await settle();
+    player.pause();
+  }
+  assert.deepEqual(generated, NATURAL_VOICES.map(voice => voice.id));
+  player.setVoice('en-US');
+  assert.equal(player.voiceId, 'yunyang');
+});
+
+test('pause cancels online generation and a late result cannot play or be cached', async () => {
+  const generation = deferred();
+  let request;
+  const { player, audio, saved, urls } = fixture(async () => null, { generate(value) { request = value; return generation.promise; } });
+  player.setBook(ordinaryBook());
+  player.play();
+  await settle();
+  assert.equal(player.status, 'loading');
+  player.toggle();
+  assert.equal(request.signal.aborted, true);
+  generation.resolve(new Blob(['late']));
+  await settle();
+  assert.equal(player.status, 'paused');
+  assert.equal(audio.playCalls, 0);
+  assert.equal(saved.length, 0);
+  assert.equal(urls.created.length, 0);
+});
+
+test('changing voice cancels old generation and only the new voice can play', async () => {
+  const requests = [];
+  const { player, saved, urls } = fixture(async () => null, { generate(value) { const pending = deferred(); requests.push({ ...value, ...pending }); return pending.promise; } });
+  player.setBook(ordinaryBook());
+  player.play();
+  await settle();
+  player.setVoice('yunyang');
+  await settle();
+  assert.equal(requests[0].signal.aborted, true);
+  requests[1].resolve(new Blob(['new']));
+  await settle();
+  requests[0].resolve(new Blob(['old']));
+  await settle();
+  assert.equal(player.voiceId, 'yunyang');
+  assert.equal(saved.length, 1);
+  assert.equal(saved[0].voiceId, 'yunyang');
+  assert.equal(await urls.created[0].blob.text(), 'new');
+});
+
+test('deleting or changing the book discards in-flight speech and atomic cache rejects removed books', async () => {
+  const generation = deferred();
+  const f = fixture(async () => null, { generate: () => generation.promise });
+  f.player.setBook(ordinaryBook());
+  f.player.play();
+  await settle();
+  f.player.setBook(null);
+  generation.resolve(new Blob(['late']));
+  await settle();
+  assert.equal(f.saved.length, 0);
+  assert.equal(f.audio.playCalls, 0);
+
+  f.player.provider = { generate: async () => new Blob(['removed']) };
+  f.store.putAudioIfBookExists = async () => false;
+  f.player.setBook(ordinaryBook());
+  let error;
+  f.player.addEventListener('statechange', event => { if (event.detail.error) error = event.detail.error; });
+  f.player.play();
+  await settle();
+  assert.equal(f.player.status, 'error');
+  assert.match(error, /已被移除/);
+  assert.equal(f.audio.playCalls, 0);
+});
+
+test('online network failure is retryable and never falls back to package instructions', async () => {
+  let attempts = 0;
+  const { player, audio } = fixture(async () => null, { generate: async () => { if (++attempts === 1) throw new Error('网络连接失败，请重试。'); return new Blob(['retried']); } });
+  player.setBook(ordinaryBook());
+  let error;
+  player.addEventListener('statechange', event => { if (event.detail.error) error = event.detail.error; });
+  player.play();
+  await settle();
+  assert.equal(player.status, 'error');
+  assert.match(error, /网络/);
+  assert.doesNotMatch(error, /听书包/);
+  player.play();
+  await settle();
+  assert.equal(player.status, 'playing');
+  assert.equal(audio.playCalls, 1);
+});
+
+test('revoked online consent does not prevent cached ordinary audio playback', async () => {
+  let networkCalls = 0;
+  const provider = new OnlineTtsProvider({
+    endpoint: 'https://voice.example/v1/tts', canGenerate: () => false,
+    fetch: async () => { networkCalls++; throw new Error('must not upload'); },
+  });
+  const { player, audio } = fixture(async () => new Blob(['cached']), provider);
+  player.setBook(ordinaryBook());
+  player.play();
+  await settle();
+  assert.equal(player.status, 'playing');
+  assert.equal(audio.playCalls, 1);
+  assert.equal(networkCalls, 0);
+});
+
+test('a cache miss that needs consent pauses without a playback error and retries after consent', async () => {
+  let allowed = false, networkCalls = 0;
+  const provider = new OnlineTtsProvider({
+    endpoint: 'https://voice.example/v1/tts', canGenerate: () => allowed,
+    fetch: async () => { networkCalls++; return new Response('audio', { headers: { 'Content-Type': 'audio/mpeg' } }); },
+  });
+  const { player, audio } = fixture(async () => null, provider);
+  const errors = [];
+  player.addEventListener('statechange', event => { if (event.detail.error) errors.push(event.detail.error); });
+  player.setBook(ordinaryBook());
+  player.play();
+  await settle();
+  assert.equal(player.status, 'paused');
+  assert.equal(audio.playCalls, 0);
+  assert.equal(networkCalls, 0);
+  assert.deepEqual(errors, []);
+  allowed = true;
+  player.play();
+  await settle();
+  assert.equal(player.status, 'playing');
+  assert.equal(networkCalls, 1);
+  assert.equal(audio.playCalls, 1);
+});
+
+test('ordinary books can generate temporary audio when the local cache is unavailable', async () => {
+  let generated = 0;
+  const { player, audio, saved } = fixture(async () => { throw new Error('IndexedDB unavailable'); }, {
+    generate: async () => { generated++; return new Blob(['temporary']); },
+  });
+  const warnings = [];
+  player.addEventListener('cachewarning', event => warnings.push(event.detail.message));
+  player.setBook(ordinaryBook());
+  player.play();
+  await settle();
+  assert.equal(player.status, 'playing');
+  assert.equal(generated, 1);
+  assert.equal(audio.playCalls, 1);
+  assert.equal(saved.length, 0);
+  assert.equal(warnings.length, 1);
+  assert.match(warnings[0], /暂不保存/);
+});
+
+test('package cache failures stay local and cannot upload the book for regeneration', async () => {
+  let generated = 0;
+  const { player, audio } = fixture(async () => { throw new Error('local audio unavailable'); }, {
+    generate: async () => { generated++; return new Blob(['must not generate']); },
+  });
+  player.setBook(makeBook());
+  await settle();
+  player.play();
+  await settle();
+  assert.equal(player.status, 'error');
+  assert.equal(audio.playCalls, 0);
+  assert.equal(generated, 0);
+});
+
+test('a cache failure arriving after pause cannot upload text or show a stale warning', async () => {
+  const read = deferred();
+  let generated = 0, warnings = 0;
+  const { player, audio } = fixture(() => read.promise, {
+    generate: async () => { generated++; return new Blob(['must not generate']); },
+  });
+  player.addEventListener('cachewarning', () => warnings++);
+  player.setBook(ordinaryBook());
+  player.play();
+  player.pause();
+  read.reject(new Error('late cache failure'));
+  await settle();
+  assert.equal(player.status, 'paused');
+  assert.equal(generated, 0);
+  assert.equal(audio.playCalls, 0);
+  assert.equal(warnings, 0);
 });

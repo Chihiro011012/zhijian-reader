@@ -105,3 +105,27 @@ test('a four-voice audio pack is stored together with every matching track', asy
   assert.deepEqual(writes[1].tracks.map(track => track.key), NATURAL_VOICES.map(voice => `book:${voice.id}:0`));
   assert.deepEqual(writes[1].tracks.map(track => track.blob), NATURAL_VOICES.map(voice => blobs[voice.id][0]));
 });
+
+test('online audio existence check shares a transaction with the audio write', async () => {
+  for (const exists of [false, true]) {
+    const store = new BookStore();
+    const writes = [];
+    store.init = async () => store;
+    store.db = { transaction(names, mode) {
+      assert.deepEqual(names, ['books', 'audio']);
+      assert.equal(mode, 'readwrite');
+      let read;
+      const transaction = { objectStore(name) {
+        return name === 'books'
+          ? { get(id) { assert.equal(id, 'book'); read = { result: exists ? { id } : undefined }; return read; } }
+          : { put(value) { writes.push(value); } };
+      } };
+      queueMicrotask(() => { read.onsuccess(); transaction.oncomplete(); });
+      return transaction;
+    } };
+    const blob = new Blob(['audio'], { type: 'audio/mpeg' });
+    assert.equal(await store.putAudioIfBookExists('book', 2, blob, 'yunxi'), exists);
+    assert.equal(writes.length, exists ? 1 : 0);
+    if (exists) assert.equal(writes[0].key, 'book:yunxi:2');
+  }
+});
