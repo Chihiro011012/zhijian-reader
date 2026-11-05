@@ -15,11 +15,9 @@ import { fileURLToPath } from 'node:url';
 import { zipSync, strToU8 } from 'fflate';
 import { DOMParser } from '@xmldom/xmldom';
 import { parseDocx, parseTextDocument } from '../src/importer.js';
+import { canonicalVoiceId, NATURAL_VOICES } from '../src/voices.js';
 
-export const DEFAULT_VOICES = [
-  { id: 'female', name: 'zh-CN-XiaoxiaoNeural', label: '女声' },
-  { id: 'male', name: 'zh-CN-YunxiNeural', label: '男声' },
-];
+export const DEFAULT_VOICES = NATURAL_VOICES;
 
 const MAX_PACKAGE_BYTES = 300 * 1024 * 1024;
 const MAX_EXPANDED_BYTES = 500 * 1024 * 1024;
@@ -28,9 +26,8 @@ function usage() {
   return `用法：node scripts/make-zjbook.mjs --input 小说.md --output 妈妈听书.zjbook [选项]
 
 选项：
-  --voices female,male    生成哪些声音（默认两种）
-  --female VOICE          自定义女声 ID
-  --male VOICE            自定义男声 ID
+  --voices xiaoxiao,xiaoyi,yunxi,yunyang
+                         生成哪些声音（默认四种，可只选其中一种或几种）
   --edge-tts PATH         edge-tts 可执行文件（默认从 PATH 查找）
   --dry-run               只检查文档和列出将生成的文件，不连接语音服务
 
@@ -45,7 +42,7 @@ export function parseArgs(argv) {
     if (arg === '--help' || arg === '-h') return { help: true };
     if (arg === '--dry-run') { options.dryRun = true; continue; }
     const [key, inline] = arg.split('=', 2);
-    if (!['--input', '--output', '--voices', '--female', '--male', '--edge-tts'].includes(key)) {
+    if (!['--input', '--output', '--voices', '--edge-tts'].includes(key)) {
       throw new Error(`未知选项：${arg}\n${usage()}`);
     }
     const value = inline ?? argv[++index];
@@ -53,13 +50,12 @@ export function parseArgs(argv) {
     if (key === '--input') options.input = value;
     else if (key === '--output') options.output = value;
     else if (key === '--edge-tts') options.edgeTts = value;
-    else if (key === '--female') options.voices = options.voices.map((voice) => voice.id === 'female' ? { ...voice, name: value } : voice);
-    else if (key === '--male') options.voices = options.voices.map((voice) => voice.id === 'male' ? { ...voice, name: value } : voice);
     else if (key === '--voices') {
       const ids = value.split(',').map((id) => id.trim()).filter(Boolean);
       options.voices = ids.map((id) => {
-        const preset = DEFAULT_VOICES.find((voice) => voice.id === id);
-        if (!preset) throw new Error(`不认识的声音 ID：${id}。可用值为 female,male。`);
+        const canonicalId = canonicalVoiceId(id);
+        const preset = DEFAULT_VOICES.find((voice) => voice.id === canonicalId);
+        if (!preset) throw new Error(`不认识的声音 ID：${id}。可用值为 xiaoxiao,xiaoyi,yunxi,yunyang。`);
         return preset;
       });
     }
@@ -67,6 +63,7 @@ export function parseArgs(argv) {
   if (!options.input && !options.help) throw new Error(`请使用 --input 指定 Markdown、TXT 或 DOCX 文档。\n${usage()}`);
   if (!options.output && options.input) options.output = `${options.input.replace(/\.[^.]+$/, '')}.zjbook`;
   if (!options.voices.length) throw new Error('至少选择一种声音。');
+  if (new Set(options.voices.map((voice) => voice.id)).size !== options.voices.length) throw new Error('请勿重复选择同一种声音。');
   return options;
 }
 
@@ -126,9 +123,10 @@ export function makeManifest(book, voices, audio) {
 /** Build and write a .zjbook. Exported for tests and other local tooling. */
 export async function buildPackage({ input, output, voices = DEFAULT_VOICES, edgeTts = 'edge-tts', dryRun = false, synthesize = runEdgeTts }) {
   if (resolve(input) === resolve(output)) throw new Error('输出文件不能覆盖小说原稿，请另选 .zjbook 文件名。');
-  if (!voices.length || voices.length > 2 || new Set(voices.map((voice) => voice.id)).size !== voices.length || voices.some((voice) => !['female', 'male'].includes(voice.id))) {
-    throw new Error('请选择一种或两种不重复的声音。');
+  if (!Array.isArray(voices) || !voices.length || voices.length > DEFAULT_VOICES.length || new Set(voices.map((voice) => voice?.id)).size !== voices.length || voices.some((voice) => !DEFAULT_VOICES.some((preset) => preset.id === voice?.id && preset.name === voice?.name))) {
+    throw new Error('请从晓晓、晓伊、云希、云扬中选择一至四种不重复的声音。');
   }
+  voices = voices.map((voice) => DEFAULT_VOICES.find((preset) => preset.id === voice.id));
   const book = await parseInput(input);
   const paragraphs = book.paragraphs.map((paragraph) => paragraph.text);
   if (paragraphs.length > 100000) throw new Error('段落超过 100000 段，请把小说拆成几卷。');

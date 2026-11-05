@@ -4,7 +4,8 @@ cd /d "%~dp0.."
 echo.
 echo 纸间 · 生成离线听书包
 echo 正文会发送到在线 Edge TTS 服务生成自然声音。
-echo 生成后妈妈导入 .zjbook 即可在手机上选择男女声收听。
+echo 默认生成晓晓、晓伊两种女声和云希、云扬两种男声。
+echo 生成后妈妈导入 .zjbook 即可在手机上选择这四种自然声音。
 echo.
 where node >nul 2>nul
 if errorlevel 1 (
@@ -18,7 +19,7 @@ if errorlevel 1 (
   pause
   exit /b 1
 )
-py -c "import edge_tts" >nul 2>nul
+py -c "from edge_tts.util import main" >nul 2>nul
 if errorlevel 1 (
   echo 首次使用，正在安装免费的 edge-tts 工具……
   py -m pip install --user edge-tts
@@ -27,6 +28,12 @@ if errorlevel 1 (
     pause
     exit /b 1
   )
+)
+py -c "from edge_tts.util import main" >nul 2>nul
+if errorlevel 1 (
+  echo 语音工具没有正确安装。请运行 py -m pip install --user --upgrade --force-reinstall edge-tts 后重试。
+  pause
+  exit /b 1
 )
 set /p "NOVEL=请把小说 .md、.txt 或 .docx 文件拖到这里，然后按回车："
 set "NOVEL=%NOVEL:"=%"
