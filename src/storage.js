@@ -160,6 +160,30 @@ export class BookStore {
     return record?.blob || null;
   }
 
+  /** Serialize the existence check with deletion, so a late request cannot orphan audio. */
+  async putAudioIfBookExists(bookId, index, blob, voiceId = DEFAULT_SETTINGS.audioVoiceId) {
+    if (typeof bookId !== 'string' || !bookId || !Number.isInteger(index) || index < 0 || !canonicalVoiceId(voiceId) || !(blob instanceof Blob)) throw new Error('音频片段数据无效，无法保存。');
+    await this.init();
+    return new Promise((resolve, reject) => {
+      let transaction, saved = false, request;
+      try {
+        transaction = this.db.transaction(['books', 'audio'], 'readwrite');
+        request = transaction.objectStore('books').get(bookId);
+        request.onsuccess = () => {
+          if (!request.result) return;
+          transaction.objectStore('audio').put({ key: `${bookId}:${voiceId}:${index}`, bookId, voiceId, index, blob });
+          saved = true;
+        };
+      } catch (error) {
+        try { transaction?.abort(); } catch {}
+        reject(storageError(error)); return;
+      }
+      transaction.oncomplete = () => resolve(saved);
+      transaction.onabort = () => reject(storageError(transaction.error || request?.error));
+      transaction.onerror = () => {};
+    });
+  }
+
   async putAudioPack(book, audioBlobs) {
     if (typeof book?.id !== 'string' || !book.id || !Array.isArray(book.paragraphs) || !book.paragraphs.length || !Array.isArray(book.audioPack?.voices) || !book.audioPack.voices.length || !isRecord(audioBlobs)) throw new Error('听书包数据无效，无法保存。');
     const tracks = [];

@@ -24,3 +24,8 @@
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
 
 .voice-option.voice-unavailable{opacity:.55;cursor:not-allowed}
+.playback-status{color:var(--green);font-size:11px;line-height:1.7}
+.reading-hint .playback-status:not(:empty){margin-left:12px}
+.listen-detail>.playback-status{text-align:center;min-height:19px}
+.player-book .playback-status:empty{display:none}
+[aria-busy="true"][data-action="play"]{box-shadow:0 0 0 4px var(--green-light)}
