@@ -22,3 +22,5 @@
   .large-controls{margin-top:18px;margin-bottom:10px}
 }
 @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important;scroll-behavior:auto!important}}
+
+.voice-option.voice-unavailable{opacity:.55;cursor:not-allowed}

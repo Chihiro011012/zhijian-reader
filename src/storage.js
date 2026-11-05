@@ -1,3 +1,5 @@
+import { canonicalVoiceId } from './voices.js';
+
 const SETTINGS_KEY = 'zhijian-settings-v1';
 
 export const DEFAULT_SETTINGS = Object.freeze({
@@ -6,8 +8,7 @@ export const DEFAULT_SETTINGS = Object.freeze({
   theme: 'paper',
   lineHeight: 1.95,
   rate: 1,
-  voiceURI: '',
-  audioVoiceId: 'female',
+  audioVoiceId: 'xiaoxiao',
   sleepMinutes: 0,
 });
 
@@ -25,8 +26,7 @@ export function normalizeSettings(value) {
     theme: ['paper', 'sage', 'dark'].includes(source.theme) ? source.theme : DEFAULT_SETTINGS.theme,
     lineHeight: Number(clamp(source.lineHeight, 1.6, 2.4, DEFAULT_SETTINGS.lineHeight).toFixed(2)),
     rate: Number(clamp(source.rate, 0.5, 2, DEFAULT_SETTINGS.rate).toFixed(2)),
-    voiceURI: typeof source.voiceURI === 'string' && source.voiceURI.length <= 1024 ? source.voiceURI : '',
-    audioVoiceId: ['female', 'male'].includes(source.audioVoiceId) ? source.audioVoiceId : DEFAULT_SETTINGS.audioVoiceId,
+    audioVoiceId: canonicalVoiceId(source.audioVoiceId) || DEFAULT_SETTINGS.audioVoiceId,
     sleepMinutes: [0, 15, 30, 60].includes(source.sleepMinutes) ? source.sleepMinutes : 0,
   };
 }
@@ -149,13 +149,13 @@ export class BookStore {
     return book;
   }
 
-  async putAudio(bookId, index, blob, voiceId = 'female') {
-    if (typeof bookId !== 'string' || !bookId || !Number.isInteger(index) || index < 0 || !['female', 'male'].includes(voiceId) || !(blob instanceof Blob)) throw new Error('音频片段数据无效，无法保存。');
+  async putAudio(bookId, index, blob, voiceId = DEFAULT_SETTINGS.audioVoiceId) {
+    if (typeof bookId !== 'string' || !bookId || !Number.isInteger(index) || index < 0 || !canonicalVoiceId(voiceId) || !(blob instanceof Blob)) throw new Error('音频片段数据无效，无法保存。');
     await this.audioTransaction('readwrite', store => store.put({ key: `${bookId}:${voiceId}:${index}`, bookId, voiceId, index, blob }));
   }
 
-  async getAudio(bookId, index, voiceId = 'female') {
-    if (typeof bookId !== 'string' || !bookId || !Number.isInteger(index) || index < 0 || !['female', 'male'].includes(voiceId)) return null;
+  async getAudio(bookId, index, voiceId = DEFAULT_SETTINGS.audioVoiceId) {
+    if (typeof bookId !== 'string' || !bookId || !Number.isInteger(index) || index < 0 || !canonicalVoiceId(voiceId)) return null;
     const record = await this.audioTransaction('readonly', store => store.get(`${bookId}:${voiceId}:${index}`));
     return record?.blob || null;
   }
@@ -164,7 +164,7 @@ export class BookStore {
     if (typeof book?.id !== 'string' || !book.id || !Array.isArray(book.paragraphs) || !book.paragraphs.length || !Array.isArray(book.audioPack?.voices) || !book.audioPack.voices.length || !isRecord(audioBlobs)) throw new Error('听书包数据无效，无法保存。');
     const tracks = [];
     for (const voice of book.audioPack.voices) {
-      if (!['female', 'male'].includes(voice.id)) throw new Error('听书包声音格式无效，无法保存。');
+      if (!canonicalVoiceId(voice.id)) throw new Error('听书包声音格式无效，无法保存。');
       const blobs = audioBlobs[voice.id];
       if (!Array.isArray(blobs) || blobs.length !== book.paragraphs.length || blobs.some(blob => !(blob instanceof Blob))) throw new Error('听书包音频片段不完整，无法保存。');
       blobs.forEach((blob, index) => tracks.push({ key: `${book.id}:${voice.id}:${index}`, bookId: book.id, voiceId: voice.id, index, blob }));

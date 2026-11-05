@@ -1,4 +1,5 @@
 import { unzipSync, strFromU8 } from 'fflate';
+import { NATURAL_VOICES, canonicalVoiceId, packageVoiceFor } from './voices.js';
 
 export const AUDIO_PACKAGE_LIMITS = Object.freeze({
   compressedBytes: 300 * 1024 * 1024,
@@ -11,6 +12,9 @@ export const AUDIO_PACKAGE_LIMITS = Object.freeze({
 const invalid = message => new Error(`听书包${message}，请重新生成后导入。`);
 const isRecord = value => value && typeof value === 'object' && !Array.isArray(value);
 const pathFor = (voiceId, index) => `audio/${voiceId}/${String(index).padStart(6, '0')}.mp3`;
+const acceptedVoiceIds = [...NATURAL_VOICES.map(voice => voice.id), 'female', 'male'];
+const audioPath = new RegExp(`^audio/(${acceptedVoiceIds.join('|')})/\\d{6}\\.mp3$`);
+const audioDirectory = new RegExp(`^audio/(${acceptedVoiceIds.join('|')})/$`);
 
 function validateManifest(manifest) {
   if (!isRecord(manifest) || manifest.version !== 1) throw invalid('版本不受支持');
@@ -33,14 +37,19 @@ function validateManifest(manifest) {
     return { title: chapter.title, index: chapter.index };
   });
   if (chapters[0].index !== 0) throw invalid('章节目录必须从第一段开始');
-  if (!Array.isArray(manifest.voices) || manifest.voices.length < 1 || manifest.voices.length > 2 || !isRecord(manifest.audio)) throw invalid('缺少声音信息');
+  if (!Array.isArray(manifest.voices) || manifest.voices.length < 1 || manifest.voices.length > NATURAL_VOICES.length || !isRecord(manifest.audio)) throw invalid('缺少声音信息');
   const ids = new Set();
+  const canonicalIds = new Set();
   const voices = manifest.voices.map(voice => {
-    if (!isRecord(voice) || !['female', 'male'].includes(voice.id) || ids.has(voice.id) || typeof voice.name !== 'string' || !voice.name || voice.name.length > 200 || typeof voice.label !== 'string' || !voice.label || voice.label.length > 100) throw invalid('声音信息格式错误');
+    if (!isRecord(voice) || ids.has(voice.id) || typeof voice.name !== 'string' || !voice.name || voice.name.length > 200 || typeof voice.label !== 'string' || !voice.label || voice.label.length > 100) throw invalid('声音信息格式错误');
+    const preset = packageVoiceFor(voice.id, voice.name);
+    const canonicalId = canonicalVoiceId(voice.id);
+    if (!preset || canonicalIds.has(canonicalId)) throw invalid('声音信息格式错误');
     ids.add(voice.id);
+    canonicalIds.add(canonicalId);
     const paths = manifest.audio[voice.id];
     if (!Array.isArray(paths) || paths.length !== paragraphs.length || paths.some((path, index) => path !== pathFor(voice.id, index))) throw invalid('音频与正文段落不匹配');
-    return { id: voice.id, name: voice.name, label: voice.label };
+    return { id: voice.id, name: preset.name, label: preset.label };
   });
   if (Object.keys(manifest.audio).some(id => !ids.has(id))) throw invalid('包含未知声音');
   return {
@@ -72,9 +81,9 @@ export async function parseAudioPackage(file) {
         if (entryNames.has(entry.name)) throw new Error('DUPLICATE_PATH');
         entryNames.add(entry.name);
         expandedBytes += entry.originalSize;
-        if (expandedBytes > AUDIO_PACKAGE_LIMITS.expandedBytes || entries > AUDIO_PACKAGE_LIMITS.paragraphs * 2 + 3) throw new Error('PACKAGE_LIMIT');
-        if (entry.name === 'audio/' || /^audio\/(female|male)\/$/.test(entry.name)) return false;
-        if (entry.name !== 'book.json' && !/^audio\/(female|male)\/\d{6}\.mp3$/.test(entry.name)) throw new Error('UNSAFE_PATH');
+        if (expandedBytes > AUDIO_PACKAGE_LIMITS.expandedBytes || entries > AUDIO_PACKAGE_LIMITS.paragraphs * NATURAL_VOICES.length + NATURAL_VOICES.length + 2) throw new Error('PACKAGE_LIMIT');
+        if (entry.name === 'audio/' || audioDirectory.test(entry.name)) return false;
+        if (entry.name !== 'book.json' && !audioPath.test(entry.name)) throw new Error('UNSAFE_PATH');
         const limit = entry.name === 'book.json' ? AUDIO_PACKAGE_LIMITS.manifestBytes : AUDIO_PACKAGE_LIMITS.trackBytes;
         if (entry.originalSize > limit) throw new Error('PACKAGE_LIMIT');
         return true;

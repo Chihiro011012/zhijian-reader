@@ -1,3 +1,5 @@
+import { bookVoices, canonicalVoiceId } from './voices.js';
+
 /** Plays locally imported MP3 paragraphs through one media element. */
 export class PackedAudioPlayer extends EventTarget {
   constructor({ store, audio = new Audio(), url = URL, mediaSession = globalThis.navigator?.mediaSession } = {}) {
@@ -10,7 +12,7 @@ export class PackedAudioPlayer extends EventTarget {
     this.status = 'idle';
     this.index = 0;
     this.rate = 1;
-    this.voiceId = 'female';
+    this.voiceId = 'xiaoxiao';
     this.book = null;
     this.paragraphs = [];
     this._generation = 0;
@@ -57,13 +59,14 @@ export class PackedAudioPlayer extends EventTarget {
     this.book = book || null;
     this.paragraphs = book?.paragraphs || [];
     this.index = this._clamp(startIndex);
-    const voices = book?.audioPack?.voices || [];
-    if (!voices.some(voice => voice.id === this.voiceId)) this.voiceId = voices[0]?.id || 'female';
+    const voices = bookVoices(book);
+    const selected = voices.find(voice => voice.id === canonicalVoiceId(this.voiceId)) || voices[0];
+    this.voiceId = selected?.trackId || 'xiaoxiao';
     this.audio.playbackRate = this.rate;
     this._metadata();
     this._setStatus('idle');
     this._emit('positionchange', { index: this.index });
-    if (book) void this._prepare(this._generation).catch(() => {});
+    if (selected) void this._prepare(this._generation).catch(() => {});
   }
 
   async _prepare(generation) {
@@ -110,6 +113,10 @@ export class PackedAudioPlayer extends EventTarget {
   }
   play() {
     if (!this.book || !this.paragraphs.length || this.status === 'playing') return;
+    if (!bookVoices(this.book).length) {
+      this._setStatus('error', '这本书还没有自然语音，请先生成并导入四音色听书包。');
+      return;
+    }
     if (this.status === 'ended') { this.index = 0; this._emit('positionchange', { index: 0 }); }
     this._setStatus('playing');
     this._start();
@@ -131,7 +138,7 @@ export class PackedAudioPlayer extends EventTarget {
     this._emit('positionchange', { index: next });
     this._setStatus('paused');
     if (autoplay) this.play();
-    else void this._prepare(this._generation).catch(() => {});
+    else if (bookVoices(this.book).length) void this._prepare(this._generation).catch(() => {});
   }
   _onEnded() {
     if (this.status !== 'playing') return;
@@ -149,9 +156,10 @@ export class PackedAudioPlayer extends EventTarget {
     this.audio.playbackRate = this.rate;
   }
   setVoice(voiceId) {
-    if (!this.book?.audioPack?.voices?.some(voice => voice.id === voiceId) || this.voiceId === voiceId) return;
+    const selected = bookVoices(this.book).find(voice => voice.id === canonicalVoiceId(voiceId));
+    if (!selected || this.voiceId === selected.trackId) return;
     const autoplay = this.status === 'playing';
-    this.voiceId = voiceId;
+    this.voiceId = selected.trackId;
     this._metadata();
     this._generation++;
     this.audio.pause();
@@ -166,42 +174,4 @@ export class PackedAudioPlayer extends EventTarget {
     this._clearSource();
     this._setStatus('idle');
   }
-}
-
-/** Shares the existing reader controls between system speech and imported audio. */
-export class ReaderPlayer extends EventTarget {
-  constructor({ speech, audio }) {
-    super();
-    this.speech = speech;
-    this.audio = audio;
-    this.active = speech;
-    for (const player of [speech, audio]) {
-      for (const name of ['positionchange', 'statechange', 'voiceschange']) {
-        player.addEventListener(name, event => { if (player === this.active) this.dispatchEvent(new CustomEvent(name, { detail: event.detail })); });
-      }
-    }
-  }
-  get status() { return this.active.status; }
-  get index() { return this.active.index; }
-  get supported() { return this.active.supported; }
-  get voices() { return this.speech.voices; }
-  get isAudioPack() { return this.active === this.audio; }
-  setBook(book, position = 0) {
-    const next = book?.audioPack ? this.audio : this.speech;
-    if (this.active !== next) {
-      this.active.stop();
-      if (next === this.speech && this.audio.mediaSession) this.audio.mediaSession.metadata = null;
-    }
-    this.active = next;
-    if (next === this.audio) next.setBook(book, position);
-    else next.setBook(book?.paragraphs || [], position);
-  }
-  play() { this.active.play(); }
-  pause() { this.active.pause(); }
-  toggle() { this.active.toggle(); }
-  seek(index, options) { this.active.seek(index, options); }
-  setRate(rate) { this.speech.setRate(rate); this.audio.setRate(rate); }
-  setVoice(uri) { this.speech.setVoice(uri); }
-  setAudioVoice(id) { this.audio.setVoice(id); }
-  stop() { this.active.stop(); }
 }
