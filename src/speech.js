@@ -30,20 +30,21 @@ const ERROR_MESSAGES = {
   'not-allowed': '请再点一次播放，并确认浏览器允许播放声音。',
   'audio-busy': '声音正在被其他应用使用，请稍后再试。',
   'audio-hardware': '暂时无法使用扬声器，请检查手机的声音设置。',
-  'network': '这个声音需要网络，请检查网络或换一个系统声音。',
-  'voice-unavailable': '所选声音暂时不可用，请换一个声音。',
+  'network': '当前系统声音需要联网，请检查网络，或在系统设置中下载可离线使用的声音。',
+  'voice-unavailable': '系统声音暂时不可用，请到系统设置中检查朗读声音。',
   'language-unavailable': '手机还没有可用的中文声音，请在系统设置中下载中文声音。',
   'synthesis-unavailable': '系统朗读暂时不可用，请稍后再试。',
   'text-too-long': '这段文字暂时无法朗读，请换一段重试。',
   'invalid-argument': '当前朗读设置不可用，请调整语速后重试。',
 };
 
-/** A paragraph-aware player. No network service receives the document here. */
+/** A paragraph-aware player using the browser's speech service. */
 export class SpeechPlayer extends EventTarget {
-  constructor({ synthesis = globalThis.speechSynthesis, Utterance = globalThis.SpeechSynthesisUtterance } = {}) {
+  constructor({ synthesis = globalThis.speechSynthesis, Utterance = globalThis.SpeechSynthesisUtterance, defaultVoiceOnly = false } = {}) {
     super();
     this.synthesis = synthesis;
     this.Utterance = Utterance;
+    this.defaultVoiceOnly = defaultVoiceOnly;
     this.supported = Boolean(synthesis && typeof synthesis.speak === 'function' && Utterance);
     this.status = 'idle';
     this.index = 0;
@@ -56,7 +57,7 @@ export class SpeechPlayer extends EventTarget {
     this._activeUtterance = null;
     this._destroyed = false;
     this._onVoicesChanged = () => this.refreshVoices();
-    if (this.supported) {
+    if (this.supported && !this.defaultVoiceOnly) {
       if (typeof synthesis.addEventListener === 'function') {
         synthesis.addEventListener('voiceschanged', this._onVoicesChanged);
       } else {
@@ -79,6 +80,7 @@ export class SpeechPlayer extends EventTarget {
   }
 
   refreshVoices() {
+    if (this.defaultVoiceOnly) { this.voices = []; return []; }
     if (!this.supported || this._destroyed) return [];
     try {
       this.voices = [...this.synthesis.getVoices()].sort((a, b) => {
@@ -151,10 +153,12 @@ export class SpeechPlayer extends EventTarget {
       utterance.rate = this.rate;
       utterance.pitch = 1;
       utterance.volume = 1;
-      const voice = this.voices.find((item) => item.voiceURI === this.voiceURI)
-        || this.voices.find((item) => /^zh(?:[-_]|$)/i.test(item.lang));
-      if (voice) utterance.voice = voice;
-      utterance.lang = voice?.lang || 'zh-CN';
+      if (!this.defaultVoiceOnly) {
+        const voice = this.voices.find((item) => item.voiceURI === this.voiceURI)
+          || this.voices.find((item) => /^zh(?:[-_]|$)/i.test(item.lang));
+        if (voice) utterance.voice = voice;
+        utterance.lang = voice?.lang || 'zh-CN';
+      }
       const isCurrent = () => !this._destroyed && generation === this._generation
         && this._activeUtterance === utterance && this.status === 'playing';
       utterance.onend = () => {
@@ -170,7 +174,7 @@ export class SpeechPlayer extends EventTarget {
           this._setStatus('paused');
           return;
         }
-        this._setStatus('error', ERROR_MESSAGES[event.error] || '朗读暂时中断，请点播放重试，或换一个声音。');
+        this._setStatus('error', ERROR_MESSAGES[event.error] || '朗读暂时中断，请点播放重试，或到系统设置中检查朗读声音。');
       };
       this._activeUtterance = utterance;
       this.synthesis.speak(utterance);
@@ -206,6 +210,7 @@ export class SpeechPlayer extends EventTarget {
   }
 
   setVoice(voiceURI) {
+    if (this.defaultVoiceOnly) return;
     this.voiceURI = String(voiceURI ?? '');
     this._restartIfPlaying();
   }
@@ -226,6 +231,7 @@ export class SpeechPlayer extends EventTarget {
     if (this._destroyed) return;
     this.stop();
     this._destroyed = true;
+    if (this.defaultVoiceOnly) return;
     if (typeof this.synthesis?.removeEventListener === 'function') {
       this.synthesis.removeEventListener('voiceschanged', this._onVoicesChanged);
     } else if (this.synthesis?.onvoiceschanged === this._onLegacyVoicesChanged) {

@@ -1,4 +1,4 @@
-import { canonicalVoiceId } from './voices.js';
+import { SYSTEM_VOICE_ID, canonicalVoiceId } from './voices.js';
 
 const SETTINGS_KEY = 'zhijian-settings-v1';
 
@@ -26,7 +26,7 @@ export function normalizeSettings(value) {
     theme: ['paper', 'sage', 'dark'].includes(source.theme) ? source.theme : DEFAULT_SETTINGS.theme,
     lineHeight: Number(clamp(source.lineHeight, 1.6, 2.4, DEFAULT_SETTINGS.lineHeight).toFixed(2)),
     rate: Number(clamp(source.rate, 0.5, 2, DEFAULT_SETTINGS.rate).toFixed(2)),
-    audioVoiceId: canonicalVoiceId(source.audioVoiceId) || DEFAULT_SETTINGS.audioVoiceId,
+    audioVoiceId: source.audioVoiceId === SYSTEM_VOICE_ID ? SYSTEM_VOICE_ID : canonicalVoiceId(source.audioVoiceId) || DEFAULT_SETTINGS.audioVoiceId,
     sleepMinutes: [0, 15, 30, 60].includes(source.sleepMinutes) ? source.sleepMinutes : 0,
   };
 }

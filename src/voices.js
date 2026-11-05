@@ -1,3 +1,6 @@
+/** A reader preference, never a packaged audio track or online voice. */
+export const SYSTEM_VOICE_ID = 'system';
+
 /** The four approved Mandarin voices, shared by the reader and package builder. */
 export const NATURAL_VOICES = Object.freeze([
   Object.freeze({ id: 'xiaoxiao', name: 'zh-CN-XiaoxiaoNeural', label: '晓晓 · 女声' }),

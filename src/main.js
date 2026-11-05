@@ -1,10 +1,10 @@
 import './style.css';
 import { parseDocument } from './importer.js';
-import { PackedAudioPlayer } from './audio-player.js';
+import { ReaderPlayer } from './reader-player.js';
 import { OnlineTtsProvider } from './online-tts.js';
 import { onlineConsent } from './online-consent.js';
 import { TTS_ENDPOINT } from './online-config.js';
-import { NATURAL_VOICES, bookVoices, canonicalVoiceId } from './voices.js';
+import { NATURAL_VOICES, SYSTEM_VOICE_ID, bookVoices } from './voices.js';
 import { parseAudioPackage } from './audio-package.js';
 import { BookStore, readSettings, writeSettings } from './storage.js';
 import { samples } from './sample.js';
@@ -41,7 +41,7 @@ const provider = new OnlineTtsProvider({ endpoint: ttsEndpoint, canGenerate: end
   if (!speechConsent.accepted) { openModal('online-consent'); return false; }
   return true;
 } });
-const player = new PackedAudioPlayer({ store, provider });
+const player = new ReaderPlayer({ store, provider });
 let settings = readSettings();
 let books = [], activeId = '', view = 'library', filter = 'all', query = '', modal = null;
 let storageAvailable = true, importing = false, timer, sleepDeadline = 0, toastTimer, wakeLock;
@@ -54,7 +54,7 @@ const chapterName = book => book.chapters[chapterFor(book)]?.title || '正文';
 const progress = book => book.paragraphs.length < 2 ? 0 : Math.round(book.position / (book.paragraphs.length - 1) * 100);
 const count = n => n >= 10000 ? `${(n / 10000).toFixed(1)} 万字` : `${n.toLocaleString()} 字`;
 const sameText = (a, b) => a.paragraphs.length === b.paragraphs.length && a.paragraphs.every((p, i) => p.text === b.paragraphs[i].text);
-function loadBook(book) { player.setBook(book, book.position); player.setVoice(settings.audioVoiceId); }
+function loadBook(book) { player.setBook(book, book.position, settings.audioVoiceId); }
 
 function toast(message) {
   const target = document.querySelector('#toast');
@@ -128,7 +128,7 @@ function seek(index, autoplay = player.active) {
 function playBook(toggle = false) {
   if (!activeBook() || deletingIds.has(activeId)) return false;
   if (toggle && player.active) { player.pause(); return true; }
-  if(!player.supported){toast('当前浏览器无法播放音频，请使用 Safari 或最新版 Chrome。');return false;}
+  if(!player.supported){toast(player.voiceId===SYSTEM_VOICE_ID?'当前浏览器不支持系统朗读，请使用 Safari 或最新版 Chrome。':'当前浏览器无法播放音频，请使用 Safari 或最新版 Chrome。');return false;}
   player.play(); return true;
 }
 function scrollToPosition(smooth = true) { const selected = document.querySelector(`.reading-paragraph[data-index="${activeBook()?.position}"]`); selected?.scrollIntoView({behavior:smooth?'smooth':'instant',block:'center'}); }
@@ -161,8 +161,14 @@ function audioSettingsHTML(book) {
   const rate = `<div class="setting-row"><label for="speech-rate">朗读语速</label><output id="speech-rate-output">${settings.rate}×</output></div><input id="speech-rate" type="range" min="0.5" max="2" step="0.1" value="${settings.rate}"/><div class="range-legend"><span>慢一点 0.5×</span><span>正常 1×</span><span>快一点 2×</span></div>`;
   const available = bookVoices(book);
   const ready = available.length > 0;
-  const selected = ready ? canonicalVoiceId(player.voiceId) : settings.audioVoiceId;
-  return `${rate}<div class="setting-row"><span>中文自然音色</span><small>${ready?'听书包 · 离线播放':'固定四种音色 · 联网生成'}</small></div><div class="voice-list">${NATURAL_VOICES.map(voice => {const included=available.some(item=>item.id===voice.id);return `<label class="voice-option ${ready&&!included?'voice-unavailable':''}"><input type="radio" name="audio-voice" value="${voice.id}" ${selected===voice.id?'checked':''} ${ready&&!included?'disabled':''}/><span><strong>${voice.label}</strong><small>${included?'中文自然语音 · 本机音频':ready?'本听书包未包含此音色':'点播放后逐段生成 · 已听音频保存在本机'}</small></span></label>`;}).join('')}</div><p class="setting-note">${ready?'切换音色会从当前段落重新播放；听书包内的音频可离线收听。请保留原始听书包。':'导入普通文档后，选好音色即可点播放。首次生成需要联网，并将当前朗读段落经 Cloudflare 服务发送到 Microsoft Edge 在线语音服务；仅打开书籍或在暂停时切换音色不会发送正文。免费接口可能暂时不可用。'}</p><button class="button primary full-width" data-action="preview-voice">${icon('volume')} 从当前段落试听</button>${!ready&&speechConsent.accepted?'<button class="text-button full-width" data-action="revoke-online">停止使用在线生成</button>':''}<button class="button subtle full-width" data-action="audio-guide">${icon('info')} 离线听书包（可选）</button>`;
+  const selected = player.voiceId;
+  const system = selected === SYSTEM_VOICE_ID;
+  const systemOption = `<label class="voice-option ${player.systemSupported?'':'voice-unavailable'}"><input type="radio" name="audio-voice" value="${SYSTEM_VOICE_ID}" ${system?'checked':''} ${player.systemSupported?'':'disabled'}/><span><strong>系统默认声音</strong><small>${player.systemSupported?'由当前设备决定 · 不经过纸间在线语音服务':'当前浏览器不支持系统朗读'}</small></span></label>`;
+  const note = system
+    ? '只保留这一个系统选项，声音交给浏览器和设备决定。网页无法保证它与辅助功能中选中的声音相同，请点试听确认；离线、锁屏和后台续读也请在手机上试播。'
+    : ready ? '切换音色会从当前段落重新播放；听书包内的音频可离线收听。请保留原始听书包。'
+      : '这四种自然音色需要联网，并将当前朗读段落经 Cloudflare 服务发送到 Microsoft Edge 在线语音服务；仅打开书籍或在暂停时切换音色不会发送正文。免费接口可能暂时不可用。';
+  return `${rate}<div class="setting-row"><span>系统声音</span><small>仅一个默认选项</small></div><div class="voice-list">${systemOption}</div><div class="setting-row"><span>中文自然音色</span><small>${ready?'听书包 · 离线播放':'联网生成'}</small></div><div class="voice-list">${NATURAL_VOICES.map(voice => {const included=available.some(item=>item.id===voice.id);return `<label class="voice-option ${ready&&!included?'voice-unavailable':''}"><input type="radio" name="audio-voice" value="${voice.id}" ${selected===voice.id?'checked':''} ${ready&&!included?'disabled':''}/><span><strong>${voice.label}</strong><small>${included?'中文自然语音 · 本机音频':ready?'本听书包未包含此音色':'点播放后逐段生成 · 已听音频保存在本机'}</small></span></label>`;}).join('')}</div><p class="setting-note">${note}</p><button class="button primary full-width" data-action="preview-voice">${icon('volume')} 从当前段落试听</button>${!ready&&speechConsent.accepted?'<button class="text-button full-width" data-action="revoke-online">停止使用在线生成</button>':''}<button class="button subtle full-width" data-action="audio-guide">${icon('info')} 离线听书包（可选）</button>`;
 }
 let lastFocus;
 function openModal(type,id) {
@@ -174,7 +180,7 @@ function openModal(type,id) {
   if(type==='online-consent') { title='使用在线自然语音'; subtitle='晓晓、晓伊、云希、云扬'; content=`<p class="delete-message">点「同意并播放」后，当前段落及接下来连续朗读的段落会经 Cloudflare 语音网关发送到 Microsoft Edge 在线语音服务，生成音频后保存在此设备。网关代码不保存小说正文或音频。书架不会公开到 GitHub。</p><p class="setting-note">服务地址：${esc(ttsEndpoint ? new URL(ttsEndpoint).host : '尚未连接')}。打开书籍、阅读、暂停时选音色不会发送文字。可在听书设置中停止在线生成；清除网站数据会删除本机音频。免费非官方语音接口可能中断。</p><div class="confirm-buttons"><button class="button subtle" data-action="close-modal">暂不使用</button><button class="button primary" data-action="allow-online">同意并播放</button></div>`; }
   if(type==='audio-guide') { title='生成四音色听书包'; subtitle='晓晓、晓伊、云希、云扬 · 导入后离线听'; content=`<div class="help-grid"><div><span class="help-number">01</span><h3>你来生成</h3><p>在电脑上的项目文件夹打开 scripts，双击「生成听书包.cmd」，把 .md、.txt 或 .docx 小说拖进窗口后按回车。默认生成晓晓、晓伊、云希、云扬四种声音，输出的 .zjbook 和原文档放在同一个文件夹。</p></div><div><span class="help-number">02</span><h3>发给妈妈</h3><p>把 .zjbook 文件私下发给妈妈。妈妈先保存到 iPhone「文件」，再在纸间点「导入小说」，选择这个听书包。一本书内可阅读、从任意段开始听、切换音色和语速。</p></div></div><div class="notice">${icon('info')} 生成自然人声时，小说文字会发送给第三方在线语音服务；妈妈导入听书包时不上传小说。免费语音接口可能不稳定，听书包可能较大，请保留原文件。</div>`; wide=true; }
   if(type==='sleep') { title='定时停止'; subtitle='听着故事，也能安心休息'; content=`<div class="sleep-options">${[0,15,30,60].map(minutes=>`<button data-action="set-sleep" data-value="${minutes}" class="${settings.sleepMinutes===minutes?'active':''}">${icon(minutes?'clock':'moon')}<span>${minutes?`${minutes} 分钟后`:'不设置定时'}</span>${settings.sleepMinutes===minutes?icon('check'):''}</button>`).join('')}</div><p class="setting-note">从设置时开始计时，到时自动暂停朗读。</p>`; }
-  if(type==='help') { title='你好，欢迎来到纸间'; subtitle='把故事交给文字，也交给声音'; wide=true; content=`<div class="help-grid"><div><span class="help-number">01</span><h3>带来你的故事</h3><p>点「导入小说」，从 iPhone「文件」中选择 .docx、.md 或 .txt 文档。微信收到的文件可以先「存储到文件」。旧版 .doc 请在 Word 中另存为 .docx。</p></div><div><span class="help-number">02</span><h3>想读就读，想听就听</h3><p>导入普通文档后，选好音色点播放，或轻点任意段落开始听。首次同意后会联网逐段生成，已生成的音频保存在本机。听书设置固定提供晓晓、晓伊、云希、云扬四种中文自然音色，并可调整语速。</p></div><div><span class="help-number">03</span><h3>放到 iPhone 主屏幕</h3><p>用 Safari 打开本网站，点「分享 → 添加到主屏幕」。成功在线打开过后，已导入的内容可离线阅读；已成功缓存的音频及听书包可离线收听，没生成的段落仍需联网。</p></div><div><span class="help-number">04</span><h3>了解文字的发送方式</h3><p>书架保存在手机。在线朗读经 Cloudflare 网关将当前和接下来播放的段落发送到 Microsoft Edge 语音服务；导入或阅读文档不会自动上传。每台手机的书架独立；清除网站数据、无痕浏览或删除应用可能使本地内容丢失，请保留原稿和听书包。</p></div></div><div class="notice">${icon('info')} 这里固定使用四种中文自然音色。免费在线接口可能暂时不可用；iPhone 首次音频准备好后若提示再点播放，请再点一次。锁屏及后台续播请先在实际手机试播。</div><p class="setting-note">这里的《山海来信》《晚风有信》是内置体验短篇。普通文档单个最大 20 MB；听书包单个最大 300 MB，较长小说可拆卷。支持按标题自动生成目录。</p>`; }
+  if(type==='help') { title='你好，欢迎来到纸间'; subtitle='把故事交给文字，也交给声音'; wide=true; content=`<div class="help-grid"><div><span class="help-number">01</span><h3>带来你的故事</h3><p>点「导入小说」，从 iPhone「文件」中选择 .docx、.md 或 .txt 文档。微信收到的文件可以先「存储到文件」。旧版 .doc 请在 Word 中另存为 .docx。</p></div><div><span class="help-number">02</span><h3>想读就读，想听就听</h3><p>导入普通文档后，在听书设置中选择「系统默认声音」或一种自然音色，再点播放；也可轻点正文中的某一段从那里听。系统选项只保留一个，由浏览器和设备决定声音。晓晓、晓伊、云希、云扬首次使用需同意在线生成。</p></div><div><span class="help-number">03</span><h3>放到 iPhone 主屏幕</h3><p>用 Safari 打开本网站，点「分享 → 添加到主屏幕」。成功在线打开过后，已导入的内容可离线阅读；已有音频和听书包可离线收听。系统声音能否离线使用，请先在手机飞行模式下试听。</p></div><div><span class="help-number">04</span><h3>了解文字的发送方式</h3><p>系统默认声音不经过纸间的在线语音服务。四种在线自然音色会经 Cloudflare 网关将连续朗读的段落发送到 Microsoft Edge 语音服务；导入或阅读不会自动上传。书架保存在此设备，清除网站数据可能使本地内容丢失，请保留原稿和听书包。</p></div></div><div class="notice">${icon('info')} 网页默认声音不一定与辅助功能里所选的声音相同，请先试听。免费在线接口可能暂时不可用；锁屏及后台续播也请在实际手机试播。</div><p class="setting-note">这里的《山海来信》《晚风有信》是内置体验短篇。普通文档单个最大 20 MB；听书包单个最大 300 MB，较长小说可拆卷。支持按标题自动生成目录。</p>`; }
   if(type==='book-menu') { const target=books.find(b=>b.id===id); if(!target)return; title=esc(target.title); subtitle=`${count(target.wordCount)} · ${target.chapters.length} 章`; content=`<div class="book-actions"><button data-action="open-book" data-id="${esc(id)}">${icon('book')} 翻开阅读 ${icon('arrow')}</button><button data-action="listen-book" data-id="${esc(id)}">${icon('headphones')} 从上次的位置听 ${icon('arrow')}</button><button class="danger" data-action="confirm-delete" data-id="${esc(id)}">${icon('trash')} 从本机书架移除</button></div>`; }
   if(type==='confirm-delete') { const target=books.find(b=>b.id===id); if(!target)return; title='移除这本故事？'; subtitle='原始文档不受影响，重新导入可以再次阅读。'; content=`<p class="delete-message">《${esc(target.title)}》的本机阅读进度也会一并移除。</p><div class="confirm-buttons"><button class="button subtle" data-action="close-modal">保留</button><button class="button danger-button" data-action="delete-book" data-id="${esc(id)}">确认移除</button></div>`; }
   document.querySelector('#modal-root').innerHTML=modalShell(title,subtitle,content,wide); document.body.classList.add('modal-open');
@@ -224,8 +230,8 @@ document.addEventListener('click', async event => {
   if(action==='open-book'||action==='listen-book'){closeModal();selectBook(button.dataset.id,action==='listen-book'?'listen':'reader');if(action==='listen-book')playBook();}
   if(action==='filter'){filter=button.dataset.filter;render();}
   if(action==='play')playBook(true);
-  if(action==='allow-online'){speechConsent.allow();closeModal();player.play();}
-  if(action==='revoke-online'){player.pause();speechConsent.revoke();openModal('audio-settings');toast('已停止在线生成；本机已有音频仍保留。');}
+  if(action==='allow-online'){speechConsent.allow();closeModal();if(player.voiceId!==SYSTEM_VOICE_ID)player.play();}
+  if(action==='revoke-online'){if(player.voiceId!==SYSTEM_VOICE_ID)player.pause();speechConsent.revoke();openModal('audio-settings');toast('已停止在线生成；本机已有音频仍保留。');}
   if(action==='prev-paragraph')seek((book?.position||0)-1);
   if(action==='next-paragraph')seek((book?.position||0)+1);
   if(action==='prev-chapter'||action==='next-chapter'){if(book){const c=chapterFor(book)+(action==='next-chapter'?1:-1);if(book.chapters[c]){seek(book.chapters[c].index);window.scrollTo({top:0,behavior:'smooth'});}}}
@@ -234,7 +240,7 @@ document.addEventListener('click', async event => {
   if(action==='goto-chapter'){seek(Number(button.dataset.index));closeModal();if(view==='reader')scrollToPosition();}
   if(action==='font'){settings.fontFamily=button.dataset.value;applySettings();openModal('reading-settings');}
   if(action==='theme'){settings.theme=button.dataset.value;applySettings();openModal('reading-settings');}
-  if(action==='preview-voice'){if(playBook())toast('正在用所选自然音色朗读当前段落');}
+  if(action==='preview-voice'){if(playBook())toast(player.voiceId===SYSTEM_VOICE_ID?'正在用系统默认声音朗读当前段落':'正在用所选自然音色朗读当前段落');}
   if(action==='set-sleep'){setSleep(Number(button.dataset.value));closeModal();toast(settings.sleepMinutes?`将在 ${settings.sleepMinutes} 分钟后停止朗读`:'已关闭定时停止');}
   if(action==='delete-book'){const id=button.dataset.id;if(deletingIds.has(id))return;deletingIds.add(id);if(activeId===id)player.stop();try{if(storageAvailable)await store.delete(id);if(activeId===id){books=books.filter(b=>b.id!==id);activeId=books[0]?.id||'';if(activeBook())loadBook(activeBook());}else books=books.filter(b=>b.id!==id);closeModal();navigate('library');toast('已从本机书架移除');}catch(error){toast(error.message);}finally{deletingIds.delete(id);}}
 });
@@ -249,7 +255,7 @@ document.addEventListener('change',event=>{
   const input=event.target;
   if(input.classList.contains('position-slider'))seek(Number(input.value));
   if(input.id==='speech-rate'){settings.rate=Number(input.value);applySettings();player.setRate(settings.rate);updatePlayer();}
-  if(input.name==='audio-voice'){settings.audioVoiceId=input.value;applySettings();player.setVoice(settings.audioVoiceId);}
+  if(input.name==='audio-voice'){settings.audioVoiceId=input.value;applySettings();player.setVoice(settings.audioVoiceId);if(modal==='audio-settings')openModal('audio-settings');}
 });
 document.addEventListener('keydown',event=>{
   if(event.key==='Escape'&&modal)closeModal();
