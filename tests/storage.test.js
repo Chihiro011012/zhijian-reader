@@ -30,6 +30,7 @@ test('preferences validate bounds, types, and the supported choices', () => {
   assert.equal(normalizeSettings({ audioVoiceId: 'female' }).audioVoiceId, 'xiaoxiao');
   assert.equal(normalizeSettings({ audioVoiceId: 'robot' }).audioVoiceId, 'xiaoxiao');
   for (const voice of NATURAL_VOICES) assert.equal(normalizeSettings({ audioVoiceId: voice.id }).audioVoiceId, voice.id);
+  assert.equal(normalizeSettings({ audioVoiceId: 'system' }).audioVoiceId, 'system');
 });
 
 test('save and reload user settings without persisting novel text or arbitrary data', () => {

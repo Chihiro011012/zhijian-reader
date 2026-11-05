@@ -2,7 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { chunkText, SpeechPlayer } from '../src/speech.js';
 
-class FakeUtterance { constructor(text) { this.text = text; } }
+class FakeUtterance { constructor(text) { this.text = text; this.voice = null; this.lang = ''; } }
 class FakeSynthesis extends EventTarget {
   constructor() {
     super();
@@ -148,4 +148,82 @@ test('empty paragraphs are skipped and replay after completion starts at the beg
   player.play();
   assert.equal(player.index, 1);
   assert.equal(player.status, 'playing');
+});
+
+test('default-only speech never enumerates or subscribes to the system voice list', () => {
+  const synthesis = new FakeSynthesis();
+  synthesis.getVoices = () => { throw new Error('must not enumerate'); };
+  synthesis.addEventListener = () => { throw new Error('must not subscribe'); };
+  synthesis.removeEventListener = () => { throw new Error('must not unsubscribe'); };
+  const player = new SpeechPlayer({ synthesis, Utterance: FakeUtterance, defaultVoiceOnly: true });
+  assert.deepEqual(player.refreshVoices(), []);
+  assert.deepEqual(player.voices, []);
+  player.setBook([{ text: '使用默认声音。' }]);
+  player.setVoice('zh');
+  player.play();
+  assert.equal(synthesis.current.voice, null);
+  assert.equal(synthesis.current.lang, '');
+  assert.equal(player.voiceURI, '');
+  const spoken = synthesis.current;
+  player.setVoice('en');
+  assert.equal(synthesis.current, spoken);
+  assert.equal(player.voiceURI, '');
+  player.destroy();
+});
+
+test('default-only speech delegates each paragraph to the current system default', () => {
+  const synthesis = new FakeSynthesis();
+  const selected = [];
+  let systemDefault = '默认声音一';
+  synthesis.speak = (utterance) => {
+    synthesis.spoken.push(utterance);
+    selected.push(utterance.voice?.name || systemDefault);
+  };
+  const player = new SpeechPlayer({ synthesis, Utterance: FakeUtterance, defaultVoiceOnly: true });
+  player.setBook([{ text: '第一段。' }, { text: '第二段。' }]);
+  player.play();
+  systemDefault = '默认声音二';
+  synthesis.finish();
+  assert.equal(player.index, 1);
+  assert.equal(synthesis.current.lang, '');
+  assert.equal(synthesis.current.voice, null);
+  assert.deepEqual(selected, ['默认声音一', '默认声音二']);
+  synthesis.finish();
+  assert.equal(player.status, 'ended');
+});
+
+test('default-only speech bounds long chunks and ignores callbacks after pause or seek', () => {
+  const synthesis = new FakeSynthesis();
+  const player = new SpeechPlayer({ synthesis, Utterance: FakeUtterance, defaultVoiceOnly: true });
+  player.setBook([{ text: '句子。'.repeat(100) }, { text: '下一段。' }]);
+  player.play();
+  assert.ok(Array.from(synthesis.current.text).length <= 180);
+  const canceled = synthesis.current;
+  player.pause();
+  canceled.onend();
+  canceled.onerror({ error: 'canceled' });
+  assert.equal(player.status, 'paused');
+  assert.equal(player.index, 0);
+  player.play();
+  assert.equal(synthesis.current.text, canceled.text);
+  const beforeSeek = synthesis.current;
+  player.seek(1, { autoplay: true });
+  beforeSeek.onend();
+  assert.equal(player.index, 1);
+  assert.equal(synthesis.current.text, '下一段。');
+  assert.equal(synthesis.current.voice, null);
+  assert.equal(synthesis.current.lang, '');
+});
+
+test('default-only speech errors direct the reader to system settings', () => {
+  const synthesis = new FakeSynthesis();
+  const player = new SpeechPlayer({ synthesis, Utterance: FakeUtterance, defaultVoiceOnly: true });
+  let message;
+  player.addEventListener('statechange', event => { message = event.detail.error; });
+  player.setBook([{ text: '内容。' }]);
+  player.play();
+  synthesis.current.onerror({ error: 'voice-unavailable' });
+  assert.equal(player.status, 'error');
+  assert.match(message, /系统设置/);
+  assert.doesNotMatch(message, /换一个/);
 });
