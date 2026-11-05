@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { BookStore, DEFAULT_SETTINGS, normalizeSettings, readSettings, writeSettings } from '../src/storage.js';
+import { NATURAL_VOICES } from '../src/voices.js';
 
 function withLocalStorage(value, callback) {
   const descriptor = Object.getOwnPropertyDescriptor(globalThis, 'localStorage');
@@ -25,8 +26,10 @@ test('preferences validate bounds, types, and the supported choices', () => {
   assert.equal(normalizeSettings({ fontSize: 10 }).fontSize, 16);
   assert.equal(normalizeSettings({ rate: 5 }).rate, 2);
   assert.equal(normalizeSettings({ lineHeight: 0 }).lineHeight, 1.6);
-  assert.equal(normalizeSettings({ audioVoiceId: 'male' }).audioVoiceId, 'male');
-  assert.equal(normalizeSettings({ audioVoiceId: 'robot' }).audioVoiceId, 'female');
+  assert.equal(normalizeSettings({ audioVoiceId: 'male' }).audioVoiceId, 'yunxi');
+  assert.equal(normalizeSettings({ audioVoiceId: 'female' }).audioVoiceId, 'xiaoxiao');
+  assert.equal(normalizeSettings({ audioVoiceId: 'robot' }).audioVoiceId, 'xiaoxiao');
+  for (const voice of NATURAL_VOICES) assert.equal(normalizeSettings({ audioVoiceId: voice.id }).audioVoiceId, voice.id);
 });
 
 test('save and reload user settings without persisting novel text or arbitrary data', () => {
@@ -39,11 +42,12 @@ test('save and reload user settings without persisting novel text or arbitrary d
   withLocalStorage({ getItem: key => values.get(key), setItem: (key, value) => values.set(key, value) }, () => {
     const saved = writeSettings(source);
     assert.deepEqual(readSettings(), saved);
-    assert.equal(saved.voiceURI, source.voiceURI);
+    assert.equal(saved.voiceURI, undefined);
     assert.equal(saved.books, undefined);
     assert.equal(values.size, 1);
     assert.equal(values.keys().next().value, 'zhijian-settings-v1');
     assert.ok(!values.values().next().value.includes('Private manuscript'));
+    assert.ok(!values.values().next().value.includes('com.apple.voice'));
     assert.equal(source.unknown, true);
   });
 });
@@ -64,4 +68,40 @@ test('unavailable IndexedDB gives a useful error and never saves books in localS
     if (descriptor) Object.defineProperty(globalThis, 'indexedDB', descriptor);
     else delete globalThis.indexedDB;
   }
+});
+
+test('audio storage supports the four voices while preserving legacy track keys', async () => {
+  const store = new BookStore();
+  const records = new Map();
+  store.audioTransaction = async (_mode, operation) => operation({
+    put(record) { records.set(record.key, record); },
+    get(key) { return records.get(key); },
+  });
+  for (const id of [...NATURAL_VOICES.map(voice => voice.id), 'female', 'male']) {
+    const blob = new Blob([id], { type: 'audio/mpeg' });
+    await store.putAudio('book', 0, blob, id);
+    assert.equal(await (await store.getAudio('book', 0, id)).text(), id);
+    assert.ok(records.has(`book:${id}:0`));
+  }
+  assert.equal(records.size, 6);
+  await assert.rejects(store.putAudio('book', 0, new Blob(['bad']), 'unapproved'), /音频片段数据无效/);
+  assert.equal(await store.getAudio('book', 0, 'unapproved'), null);
+});
+
+test('a four-voice audio pack is stored together with every matching track', async () => {
+  const store = new BookStore();
+  const writes = [];
+  store.init = async () => store;
+  store.replaceAudioPack = (_audio, bookId, tracks) => writes.push({ bookId, tracks });
+  store.db = { transaction() {
+    const transaction = { objectStore: () => ({ put: book => writes.push(book) }) };
+    queueMicrotask(() => transaction.oncomplete());
+    return transaction;
+  } };
+  const book = { id: 'book', paragraphs: [{ text: '正文' }], audioPack: { voices: NATURAL_VOICES } };
+  const blobs = Object.fromEntries(NATURAL_VOICES.map(voice => [voice.id, [new Blob([voice.id])]]));
+  await store.putAudioPack(book, blobs);
+  assert.equal(writes[0], book);
+  assert.deepEqual(writes[1].tracks.map(track => track.key), NATURAL_VOICES.map(voice => `book:${voice.id}:0`));
+  assert.deepEqual(writes[1].tracks.map(track => track.blob), NATURAL_VOICES.map(voice => blobs[voice.id][0]));
 });

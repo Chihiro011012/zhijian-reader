@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { PackedAudioPlayer } from '../src/audio-player.js';
+import { NATURAL_VOICES } from '../src/voices.js';
 
 class FakeAudio extends EventTarget {
   constructor() {
@@ -53,7 +54,7 @@ function makeBook(id = 'book-1', count = 3) {
     id,
     title: '测试小说',
     paragraphs: Array.from({ length: count }, (_, index) => ({ text: `第${index + 1}段` })),
-    audioPack: { voices: [{ id: 'female', name: '女声' }, { id: 'male', name: '男声' }] },
+    audioPack: { voices: [{ id: 'female', name: 'zh-CN-XiaoxiaoNeural' }, { id: 'male', name: 'zh-CN-YunxiNeural' }] },
   };
 }
 
@@ -191,4 +192,55 @@ test('a rejected media play promise reports denial and ordinary playback errors'
   await settle();
   assert.equal(player.status, 'error');
   assert.match(errors.at(-1).error, /检查手机声音设置/);
+});
+
+test('all four natural voices select their own local tracks at the current paragraph', async () => {
+  const { player, audio, requests } = fixture();
+  const book = makeBook();
+  book.audioPack.voices = NATURAL_VOICES;
+  player.setBook(book, 1);
+  await settle();
+  player.play();
+  for (const voice of NATURAL_VOICES) {
+    player.setVoice(voice.id);
+    await settle();
+    assert.equal(player.voiceId, voice.id);
+    assert.equal(player.index, 1);
+    assert.equal(player.status, 'playing');
+    assert.equal(requests.at(-1).voiceId, voice.id);
+  }
+  const calls = audio.playCalls;
+  player.setVoice('en-US');
+  assert.equal(player.voiceId, 'yunyang');
+  assert.equal(audio.playCalls, calls);
+});
+
+test('canonical preferences still play old female and male track keys', async () => {
+  const { player, requests } = fixture();
+  player.setBook(makeBook());
+  await settle();
+  player.setVoice('yunxi');
+  await settle();
+  assert.equal(player.voiceId, 'male');
+  assert.equal(requests.at(-1).voiceId, 'male');
+  player.setVoice('xiaoyi');
+  assert.equal(player.voiceId, 'male');
+});
+
+test('ordinary text remains navigable without probing or playing a system voice', async () => {
+  const { player, audio, requests } = fixture();
+  const book = makeBook();
+  delete book.audioPack;
+  player.setBook(book);
+  player.seek(1);
+  await settle();
+  assert.equal(player.index, 1);
+  assert.equal(requests.length, 0);
+  let error;
+  player.addEventListener('statechange', event => { error = event.detail.error; });
+  player.play();
+  assert.equal(player.status, 'error');
+  assert.match(error, /先生成并导入四音色听书包/);
+  assert.equal(audio.playCalls, 0);
+  assert.equal(requests.length, 0);
 });

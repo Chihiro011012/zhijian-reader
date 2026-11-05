@@ -2,6 +2,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { strToU8, zipSync } from 'fflate';
 import { parseAudioPackage } from '../src/audio-package.js';
+import { NATURAL_VOICES } from '../src/voices.js';
 
 const paragraph = { text: '第一段正文。', type: 'paragraph' };
 const manifest = overrides => ({
@@ -27,6 +28,7 @@ test('parses a two voice package and preserves text-to-audio paragraph alignment
   const result = await parseAudioPackage(file);
   assert.equal(result.book.title, '测试小说');
   assert.deepEqual(result.book.audioPack.voices.map(voice => voice.id), ['female', 'male']);
+  assert.deepEqual(result.book.audioPack.voices.map(voice => voice.label), ['晓晓 · 女声', '云希 · 男声']);
   assert.equal(result.audioBlobs.female.length, 1);
   assert.deepEqual([...new Uint8Array(await result.audioBlobs.female[0].arrayBuffer())], [1, 2, 3]);
   assert.deepEqual([...new Uint8Array(await result.audioBlobs.male[0].arrayBuffer())], [4, 5]);
@@ -34,7 +36,7 @@ test('parses a two voice package and preserves text-to-audio paragraph alignment
 
 test('rejects a missing segment and manifest paths that do not exactly map paragraphs', async () => {
   const missing = packageFile({ 'book.json': json(manifest()), 'audio/female/000000.mp3': new Uint8Array([1]) });
-  await assert.rejects(parseAudioPackage(missing), /缺少第 1 段男声音频/);
+  await assert.rejects(parseAudioPackage(missing), /缺少第 1 段云希 · 男声音频/);
   const traversalManifest = manifest({ audio: { female: ['../../other'], male: ['audio/male/000000.mp3'] } });
   const traversal = packageFile({ 'book.json': json(traversalManifest) });
   await assert.rejects(parseAudioPackage(traversal), /音频与正文段落不匹配/);
@@ -61,4 +63,31 @@ test('rejects malformed audio metadata and unexpected files', async () => {
     'extra.txt': strToU8('extra'),
   });
   await assert.rejects(parseAudioPackage(unexpected), /不支持的文件或路径/);
+});
+
+test('imports all four fixed voices with independent paragraph-aligned audio', async () => {
+  const paragraphs = [paragraph, { text: '第二段正文。', type: 'paragraph' }];
+  const audio = Object.fromEntries(NATURAL_VOICES.map(voice => [voice.id, paragraphs.map((_, index) => `audio/${voice.id}/${String(index).padStart(6, '0')}.mp3`)]));
+  const entries = { 'book.json': json(manifest({ paragraphs, voices: NATURAL_VOICES, audio })) };
+  for (const [voiceIndex, voice] of NATURAL_VOICES.entries()) {
+    for (const [index, path] of audio[voice.id].entries()) entries[path] = new Uint8Array([voiceIndex + 1, index + 1]);
+  }
+  const result = await parseAudioPackage(packageFile(entries));
+  assert.deepEqual(result.book.audioPack.voices, NATURAL_VOICES);
+  assert.equal(result.book.audioPack.trackCount, 2);
+  for (const [voiceIndex, voice] of NATURAL_VOICES.entries()) {
+    assert.equal(result.audioBlobs[voice.id].length, 2);
+    assert.deepEqual([...new Uint8Array(await result.audioBlobs[voice.id][1].arrayBuffer())], [voiceIndex + 1, 2]);
+  }
+});
+
+test('rejects unapproved voice names and duplicate canonical voices in legacy packages', async () => {
+  for (const voices of [
+    [{ id: 'female', name: 'zh-CN-UnapprovedNeural', label: '自定义' }],
+    [{ id: 'xiaoxiao', name: 'zh-CN-XiaoyiNeural', label: '冒名声音' }],
+    [NATURAL_VOICES[0], { id: 'female', name: NATURAL_VOICES[0].name, label: '重复女声' }],
+  ]) {
+    const audio = Object.fromEntries(voices.map(voice => [voice.id, [`audio/${voice.id}/000000.mp3`]]));
+    await assert.rejects(parseAudioPackage(packageFile({ 'book.json': json(manifest({ voices, audio })) })), /声音信息格式错误/);
+  }
 });
