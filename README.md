@@ -15,6 +15,8 @@
 
 ## 免费公网部署（电脑无需常开）
 
+正式网址：<https://chihiro011012.github.io/zhijian-reader/>。妈妈可用 Safari 直接打开，电脑无需保持运行，也不需要连接同一个 Wi-Fi。
+
 项目已经包含 GitHub Pages 自动部署工作流。发布一次后，妈妈可用 iPhone 在外面通过 HTTPS 地址打开；网站由 GitHub 托管，日常使用不需要你的电脑在线，也不要求同一 Wi-Fi。GitHub 仓库只放应用代码，**不要把小说原稿、私人资料或听书音频放进公开仓库**。小说仍由妈妈从自己的手机导入。
 
 首次部署需要一个 GitHub 账号：
@@ -33,7 +35,7 @@ git push -u origin main
 
 4. 在仓库“Actions”中等“Deploy reader to GitHub Pages”成功。正式地址显示在“Settings → Pages”，通常是 https://你的用户名.github.io/你的仓库名/ 。把这个地址发给妈妈，用 Safari 打开即可。“分享 → 添加到主屏幕”可像 App 一样使用。
 
-今后改好应用后再次提交并推送，工作流会自动运行测试、构建和部署。当前项目尚未连接远程仓库，因此还没有可使用的公网地址。
+今后改好应用后再次提交并推送，工作流会自动运行测试、构建和部署。本项目已连接公开仓库 `Chihiro011012/zhijian-reader`，首次 GitHub Pages 部署已于 2026-11-05 成功。
 
 截至 2026-11-05，[GitHub Free 支持公开仓库的 Pages](https://docs.github.com/en/pages/getting-started-with-github-pages)，公开仓库使用的标准 Linux Actions 运行器也免费。[Pages 使用限制](https://docs.github.com/en/pages/getting-started-with-github-pages/github-pages-limits)包括：发布后的网站不超过 1 GB，流量软上限为每月 100 GB，部署超过 10 分钟会超时。此项目的工作流只上传 dist 中的应用静态资源。免费规则可能调整，正式地址也应先用妈妈手机的蜂窝网络打开验证。
 
