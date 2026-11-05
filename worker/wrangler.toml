@@ -1,0 +1,11 @@
+name = "zhijian-reader-voice"
+main = "index.js"
+compatibility_date = "2026-11-05"
+workers_dev = true
+
+[vars]
+ALLOWED_ORIGINS = "https://chihiro011012.github.io"
+
+# Do not record request bodies or novel text in application logs.
+[observability]
+enabled = false
